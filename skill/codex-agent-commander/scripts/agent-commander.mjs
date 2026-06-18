@@ -10,6 +10,7 @@ const scriptDir = path.dirname(__filename);
 const repoRoot = path.resolve(scriptDir, "..");
 const templatePath = path.join(repoRoot, "templates", "assistant-task.md");
 const statusValues = new Set(["done", "needs_followup", "blocked", "failed"]);
+const booleanArgs = new Set(["help", "dryRun", "doctorRun"]);
 
 main();
 
@@ -19,6 +20,7 @@ function main() {
   try {
     if (command === "help" || opts.help) return printHelp();
     if (command === "doctor") return doctor(opts);
+    if (command === "dry-run") return dryRun(opts);
     if (command === "run-hidden") return runHidden(opts);
     if (command === "open-visible") return runHidden(opts);
     if (command === "continue-hidden") return continueHidden(opts);
@@ -41,7 +43,7 @@ function parseArgs(argv) {
       continue;
     }
     const key = camel(token.slice(2));
-    if (key === "help") {
+    if (booleanArgs.has(key)) {
       opts[key] = true;
       continue;
     }
@@ -134,6 +136,8 @@ function doctor(opts) {
   const workbuddy = findWorkBuddy();
   const version = claude ? spawnCmd(claude.path || claude.command, ["--version"], { cwd: project.projectRoot }) : null;
   const workbuddyVersion = workbuddy ? spawnAssistant(workbuddy, ["--version"], { cwd: project.projectRoot }) : null;
+  const selectedAssistant = findAssistant(project.assistant);
+  const writeReportCheck = opts.doctorRun && selectedAssistant ? runDoctorWriteReportCheck(project, selectedAssistant, opts) : null;
   printJson({
     platform: process.platform,
     assistant: project.assistant,
@@ -147,7 +151,29 @@ function doctor(opts) {
     claudeVersion: version?.status === 0 ? version.stdout.trim() : null,
     workbuddy,
     workbuddyVersion: workbuddyVersion?.status === 0 ? workbuddyVersion.stdout.trim() : null,
-    ready: Boolean(findAssistant(project.assistant) && fs.existsSync(project.projectRoot))
+    writeReportCheck,
+    ready: Boolean(selectedAssistant && fs.existsSync(project.projectRoot) && (!opts.doctorRun || writeReportCheck?.report?.reportStatus === "done"))
+  });
+}
+
+function runDoctorWriteReportCheck(project, assistant, opts) {
+  const title = `Doctor ${project.assistant} write report check`;
+  const body = [
+    `This is a non-invasive doctor check for ${project.assistant}.`,
+    "Do not modify source files.",
+    "Only write the required report file.",
+    "In Summary, include exactly: AGENT_COMMANDER_DOCTOR_OK.",
+    "Set status to done."
+  ].join("\n");
+  const run = createRun(project, title, body);
+  fs.mkdirSync(run.sessionDir, { recursive: true });
+  writeRound(project, run, run.rounds[0]);
+  return withProjectLock(project, () => {
+    const assistantResult = runAssistantRound(project, run, run.rounds[0], assistant, { ...opts, waitMs: opts.waitMs || 120000, maxTurns: opts.maxTurns || 2 });
+    saveRun(project, run);
+    const report = inspectReport(run.reportFile);
+    updateReportIndex(project, run, run.rounds[0], report, `doctor_${assistantResult.status}`);
+    return baseOutput(run, { status: "doctor_run", assistantResult, report });
   });
 }
 
@@ -156,17 +182,23 @@ function runHidden(opts) {
   const assistant = findAssistant(project.assistant);
   const title = opts.title || "Assistant task";
   const body = opts.body || fail("Missing --body.");
-  if (!assistant) return printJson(assistantUnavailable(project, { title, body }));
   const run = createRun(project, title, body);
   fs.mkdirSync(run.sessionDir, { recursive: true });
   writeRound(project, run, run.rounds[0]);
+  if (opts.dryRun) return finishDryRun(project, run, run.rounds[0]);
+  if (!assistant) return printJson(assistantUnavailable(project, { title, body }));
   const output = withProjectLock(project, () => {
-    const launched = runAssistantRound(project, run, run.rounds[0], assistant, opts);
+    const assistantResult = runAssistantRound(project, run, run.rounds[0], assistant, opts);
     saveRun(project, run);
     const report = inspectReport(run.reportFile);
-    return baseOutput(run, { status: launched ? "launched" : "launch_failed", report });
+    updateReportIndex(project, run, run.rounds[0], report, assistantResult.status);
+    return baseOutput(run, { status: assistantResult.status, assistantResult, report });
   });
   printJson(output);
+}
+
+function dryRun(opts) {
+  return runHidden({ ...opts, dryRun: true });
 }
 
 function continueHidden(opts) {
@@ -189,15 +221,25 @@ function continueHidden(opts) {
   writeRound(project, run, round);
   run.windowTitle = `AgentCommander-${run.runId}-round-${round.round}`;
   const assistant = findAssistant(project.assistant);
+  if (opts.dryRun) return finishDryRun(project, run, round);
   if (!assistant) return printJson(assistantUnavailable(project, { title: round.title, body, runId }));
   const output = withProjectLock(project, () => {
-    const launched = runAssistantRound(project, run, round, assistant, opts);
-    round.launched = launched;
+    const assistantResult = runAssistantRound(project, run, round, assistant, opts);
+    round.launched = assistantResult.ok;
     saveRun(project, run);
     const report = inspectReport(round.reportFile);
-    return baseOutput(run, { status: "continued", round: round.round, launched, report });
+    updateReportIndex(project, run, round, report, assistantResult.status);
+    return baseOutput(run, { status: "continued", round: round.round, assistantResult, report });
   });
   printJson(output);
+}
+
+function finishDryRun(project, run, round) {
+  round.dryRun = true;
+  saveRun(project, run);
+  const report = inspectReport(round.reportFile);
+  updateReportIndex(project, run, round, report, "dry_run");
+  printJson(baseOutput(run, { status: "dry_run", round: round.round, report }));
 }
 
 function assistantUnavailable(project, details = {}) {
@@ -316,14 +358,17 @@ function runClaudeRound(project, run, round, claude, opts) {
     input: prompt,
     encoding: "utf8",
     windowsHide: true,
+    timeout: assistantTimeoutMs(opts),
     maxBuffer: 1024 * 1024 * 20
   });
   fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stdout.txt`), result.stdout || "", "utf8");
   fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stderr.txt`), result.stderr || "", "utf8");
   round.exitCode = result.status;
+  round.signal = result.signal || null;
+  round.errorCode = result.error?.code || null;
   saveRun(project, run);
-  waitForReportWithResends(run, round, opts);
-  return result.status === 0;
+  const reportExists = waitForReportWithResends(run, round, opts);
+  return assistantRunResult(result, reportExists);
 }
 
 function runWorkBuddyRound(project, run, round, workbuddy, opts) {
@@ -341,20 +386,38 @@ function runWorkBuddyRound(project, run, round, workbuddy, opts) {
     project.projectRoot
   ];
   if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
-  const timeoutMs = Number(opts.timeoutMs || opts.assistantTimeoutMs || 10 * 60 * 1000);
   const result = spawnAssistant(workbuddy, args, {
     cwd: project.projectRoot,
     encoding: "utf8",
     windowsHide: true,
-    timeout: timeoutMs,
+    timeout: assistantTimeoutMs(opts),
     maxBuffer: 1024 * 1024 * 20
   });
   fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stdout.txt`), result.stdout || "", "utf8");
   fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stderr.txt`), result.stderr || "", "utf8");
   round.exitCode = result.status;
+  round.signal = result.signal || null;
+  round.errorCode = result.error?.code || null;
   saveRun(project, run);
-  waitForReportWithResends(run, round, opts);
-  return result.status === 0;
+  const reportExists = waitForReportWithResends(run, round, opts);
+  return assistantRunResult(result, reportExists);
+}
+
+function assistantTimeoutMs(opts) {
+  return Number(opts.timeoutMs || opts.assistantTimeoutMs || 10 * 60 * 1000);
+}
+
+function assistantRunResult(result, reportExists) {
+  const timedOut = result.error?.code === "ETIMEDOUT" || result.signal === "SIGTERM";
+  const ok = result.status === 0 && reportExists;
+  return {
+    ok,
+    status: ok ? "completed" : timedOut ? "timed_out" : reportExists ? "report_written_with_error" : "no_report",
+    exitCode: result.status,
+    signal: result.signal || null,
+    errorCode: result.error?.code || null,
+    reportExists
+  };
 }
 
 function withProjectLock(project, work) {
@@ -362,6 +425,7 @@ function withProjectLock(project, work) {
   const lockFile = path.join(project.stateRoot, "agent-commander.lock");
   const start = Date.now();
   while (fs.existsSync(lockFile)) {
+    if (archiveStaleLock(lockFile)) continue;
     if (Date.now() - start > 10 * 60 * 1000) fail(`Another assistant task is still running: ${lockFile}`);
     sleep(2000);
   }
@@ -370,6 +434,37 @@ function withProjectLock(project, work) {
     return work();
   } finally {
     try { fs.unlinkSync(lockFile); } catch {}
+  }
+}
+
+function archiveStaleLock(lockFile) {
+  let lock = null;
+  try {
+    lock = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+  } catch {
+    return renameStaleLock(lockFile, "invalid");
+  }
+  const pid = Number(lock.pid);
+  if (!pid || !processAlive(pid)) return renameStaleLock(lockFile, "stale");
+  return false;
+}
+
+function renameStaleLock(lockFile, reason) {
+  const archived = `${lockFile}.${reason}.${stamp()}.bak`;
+  try {
+    fs.renameSync(lockFile, archived);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -413,6 +508,29 @@ function closeWindow(windowTitle) {
 function saveRun(project, run) {
   fs.mkdirSync(project.runsDir, { recursive: true });
   fs.writeFileSync(path.join(project.runsDir, `${run.runId}.json`), JSON.stringify(run, null, 2), "utf8");
+}
+
+function updateReportIndex(project, run, round, report, runStatus) {
+  fs.mkdirSync(project.reportDir, { recursive: true });
+  const indexFile = path.join(project.reportDir, "index.json");
+  const current = fs.existsSync(indexFile) ? readJsonIfExists(indexFile) : [];
+  const entries = Array.isArray(current) ? current : [];
+  const nextEntry = {
+    runId: run.runId,
+    round: round.round,
+    assistant: run.assistant,
+    title: round.title || run.title,
+    status: runStatus,
+    reportStatus: report.reportStatus,
+    reportFile: round.reportFile,
+    instructionFile: round.instructionFile,
+    projectRoot: run.projectRoot,
+    createdAt: run.createdAt,
+    updatedAt: new Date().toISOString()
+  };
+  const filtered = entries.filter((entry) => !(entry.runId === nextEntry.runId && entry.round === nextEntry.round));
+  filtered.push(nextEntry);
+  fs.writeFileSync(indexFile, JSON.stringify(filtered, null, 2), "utf8");
 }
 
 function loadRunById(runId, opts = {}) {
@@ -555,7 +673,8 @@ function printHelp() {
 
 Commands:
   run-hidden --assistant claude|workbuddy --project-root <folder> --title <title> --body <text>
-  doctor --assistant claude|workbuddy --project-root <folder>
+  dry-run --assistant claude|workbuddy --project-root <folder> --title <title> --body <text>
+  doctor --assistant claude|workbuddy --project-root <folder> [--doctor-run]
   continue-hidden --assistant claude|workbuddy --project-root <folder> --run <run_id> --body <text>
   check --run <run_id>
 `);

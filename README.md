@@ -13,10 +13,13 @@ Assistant routing is project-neutral. Named projects should be handled through p
 - Uses the current project folder, not a hard-coded machine path.
 - Supports project-local configuration through `.agent-commander/config.json`.
 - Writes task instructions and reports to project-specific folders.
-- Uses `bypassPermissions` by default for delegated Claude Code work.
+- Uses `bypassPermissions` by default for delegated Claude Code and WorkBuddy work.
 - Supports follow-up rounds.
 - Uses a project lock so only one assistant task runs at a time.
-- If Claude Code is missing, reports `assistant_unavailable` and lets Codex continue the task directly.
+- Automatically archives stale project locks when the recorded process is gone.
+- Supports dry-run task generation without launching an assistant.
+- Writes `index.json` in the report folder for run history.
+- If Claude Code or WorkBuddy is missing, reports `assistant_unavailable` and lets Codex continue the task directly.
 - Does not use or overwrite the user's system clipboard.
 - Does not inject keystrokes into the user's active desktop session.
 - Does not open multiple assistant windows or disturb the user's current app focus, typing, or clipboard.
@@ -33,7 +36,8 @@ The same routing applies to any project. Project-specific instructions belong in
 ## Requirements
 
 - Node.js 18 or newer
-- Claude Code installed and available as `claude.cmd` or `claude`
+- Claude Code installed and available as `claude.cmd` or `claude` for Claude delegation
+- WorkBuddy installed with its bundled `codebuddy` CLI for WorkBuddy delegation
 
 ## Quick Check
 
@@ -41,6 +45,20 @@ From this repository:
 
 ```powershell
 node .\scripts\agent-commander.mjs doctor --project-root "C:\path\to\your\project"
+```
+
+To verify that an assistant can actually write a report:
+
+```powershell
+node .\scripts\agent-commander.mjs doctor --assistant workbuddy --project-root "C:\path\to\your\project" --doctor-run
+```
+
+## Dry Run
+
+Generate task, prompt, report path, and index entries without launching an assistant:
+
+```powershell
+node .\scripts\agent-commander.mjs dry-run --assistant claude --project-root "C:\path\to\your\project" --title "Check prompt" --body "Review this instruction only."
 ```
 
 ## Run A Background Assistant Task

@@ -23,6 +23,7 @@ Rules:
 3. Write the report to the exact required report file.
 4. In chat, reply only with the saved report path.
 5. Read the listed project context files before starting, when any are listed.
+6. Do not modify source files unless this task explicitly allows changes.
 
 Task:
 

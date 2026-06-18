@@ -73,15 +73,21 @@ Relative paths are resolved from the project root.
 
 ## Claude Code Defaults
 
-Run Claude Code in the background by default. Default to `bypassPermissions` for delegated assistant work unless the user or environment requires a safer mode.
+Run Claude Code in the background by default. Always default delegated assistant work to `bypassPermissions` unless the user explicitly asks for a different mode in the current task.
 
 Do not disturb the user's desktop session. Do not overwrite the clipboard. Do not inject keystrokes into the user's active app. Do not open multiple assistant windows. Use the project lock and run assistant work sequentially.
 
 If Claude Code or WorkBuddy is missing, the bridge returns `assistant_unavailable` with `codexAction: continue_without_assistant`. Treat this as a delegation skip, not as a failure of the user's task. Continue the work directly in Codex and mention that assistant collaboration was unavailable only when it matters to the user.
 
+The bridge archives stale lock files automatically when the recorded process is gone. If an assistant hangs or times out, inspect the run folder's stdout/stderr files and continue in Codex unless a retry is clearly useful.
+
 ## WorkBuddy Defaults
 
 Use WorkBuddy through its `codebuddy` CLI with `-p`, `-y`, `--permission-mode bypassPermissions`, and `--add-dir <project root>`. WorkBuddy is a desktop app, but the bridge should not click, type, or paste into the visible desktop window by default.
+
+## Diagnostics
+
+Use `dry-run` to generate task files and report paths without launching an assistant. Use `doctor --doctor-run` only when a real assistant write-report check is needed. Read `<reportDir>\index.json` for the run history when available.
 
 ## Report Status
 
