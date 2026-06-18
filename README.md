@@ -7,6 +7,7 @@ Codex remains the commander. Claude Code and other agents are helpers for bounde
 ## What It Does
 
 - Runs Claude Code in the background by default.
+- Runs WorkBuddy through its bundled `codebuddy` CLI when selected.
 - Uses the current project folder, not a hard-coded machine path.
 - Supports project-local configuration through `.agent-commander/config.json`.
 - Writes task instructions and reports to project-specific folders.
@@ -34,13 +35,19 @@ node .\scripts\agent-commander.mjs doctor --project-root "C:\path\to\your\projec
 ## Run A Background Assistant Task
 
 ```powershell
-node .\scripts\agent-commander.mjs run-hidden --project-root "C:\path\to\your\project" --title "Audit current change" --body "Review the current change and write a report only."
+node .\scripts\agent-commander.mjs run-hidden --assistant claude --project-root "C:\path\to\your\project" --title "Audit current change" --body "Review the current change and write a report only."
+```
+
+To use WorkBuddy:
+
+```powershell
+node .\scripts\agent-commander.mjs run-hidden --assistant workbuddy --project-root "C:\path\to\your\project" --title "Runtime check" --body "Check the project and write a report only."
 ```
 
 ## Continue The Same Run
 
 ```powershell
-node .\scripts\agent-commander.mjs continue-hidden --project-root "C:\path\to\your\project" --run <run_id> --body "Follow up on the previous report and verify the missing item."
+node .\scripts\agent-commander.mjs continue-hidden --assistant claude --project-root "C:\path\to\your\project" --run <run_id> --body "Follow up on the previous report and verify the missing item."
 ```
 
 Follow-up rounds run sequentially under the same project lock. This is deliberate: the public version avoids controlling the user's active keyboard, mouse, windows, or clipboard.
@@ -60,7 +67,11 @@ Example:
   "stateRoot": ".agent-commander",
   "taskDir": ".agent-commander/tasks",
   "reportDir": ".agent-commander/reports",
-  "contextFiles": []
+  "contextFiles": [],
+  "assistantContextFiles": {
+    "claude": [],
+    "workbuddy": []
+  }
 }
 ```
 

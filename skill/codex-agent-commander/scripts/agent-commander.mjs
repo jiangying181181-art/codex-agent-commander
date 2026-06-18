@@ -67,18 +67,29 @@ function getProject(opts) {
   const projectRoot = path.resolve(opts.projectRoot || process.cwd());
   const configFile = path.resolve(opts.config || path.join(projectRoot, ".agent-commander", "config.json"));
   const config = readJsonIfExists(configFile);
+  const assistant = normalizeAssistant(opts.assistant || config.defaultAssistant || "claude");
   const stateRoot = resolveProjectPath(projectRoot, firstValue(opts.stateRoot, config.stateRoot, ".agent-commander"));
   const taskDir = firstValue(opts.taskDir, config.taskDir);
   const reportDir = firstValue(opts.reportDir, config.reportDir);
+  const contextFiles = [
+    ...normalizeContextFiles(projectRoot, opts.contextFile ?? config.contextFiles ?? config.defaultContextFiles),
+    ...normalizeContextFiles(projectRoot, assistantContextFiles(config, assistant))
+  ];
   return {
+    assistant,
     projectRoot,
     configFile,
     stateRoot,
     runsDir: path.join(stateRoot, "runs"),
     taskDir: taskDir ? resolveProjectPath(projectRoot, taskDir) : path.join(stateRoot, "tasks"),
     reportDir: reportDir ? resolveProjectPath(projectRoot, reportDir) : path.join(stateRoot, "reports"),
-    contextFiles: normalizeContextFiles(projectRoot, opts.contextFile ?? config.contextFiles ?? config.defaultContextFiles)
+    contextFiles
   };
+}
+
+function findAssistant(assistant) {
+  if (assistant === "workbuddy") return findWorkBuddy();
+  return findClaude();
 }
 
 function findClaude() {
@@ -94,12 +105,38 @@ function findClaude() {
   return null;
 }
 
+function findWorkBuddy() {
+  if (process.env.CODEX_AGENT_COMMANDER_DISABLE_WORKBUDDY === "1") return null;
+  const envPath = process.env.WORKBUDDY_CLI;
+  if (envPath && fs.existsSync(envPath)) return { command: "workbuddy", path: envPath, runner: "node" };
+  const pathCandidate = findCommand(process.platform === "win32" ? ["codebuddy.cmd", "cbc.cmd", "codebuddy", "cbc"] : ["codebuddy", "cbc"]);
+  if (pathCandidate) return { command: path.basename(pathCandidate), path: pathCandidate };
+  const localCandidate = process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || "", "Programs", "WorkBuddy", "resources", "app.asar.unpacked", "cli", "bin", "codebuddy")
+    : "";
+  if (localCandidate && fs.existsSync(localCandidate)) return { command: "codebuddy", path: localCandidate, runner: "node" };
+  return null;
+}
+
+function findCommand(candidates) {
+  for (const candidate of candidates) {
+    const result = spawnSync(process.platform === "win32" ? "where.exe" : "which", [candidate], { encoding: "utf8" });
+    if (result.status === 0) {
+      return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    }
+  }
+  return null;
+}
+
 function doctor(opts) {
   const project = getProject(opts);
   const claude = findClaude();
+  const workbuddy = findWorkBuddy();
   const version = claude ? spawnCmd(claude.path || claude.command, ["--version"], { cwd: project.projectRoot }) : null;
+  const workbuddyVersion = workbuddy ? spawnAssistant(workbuddy, ["--version"], { cwd: project.projectRoot }) : null;
   printJson({
     platform: process.platform,
+    assistant: project.assistant,
     projectRoot: project.projectRoot,
     configFile: project.configFile,
     stateRoot: project.stateRoot,
@@ -108,21 +145,23 @@ function doctor(opts) {
     contextFiles: project.contextFiles,
     claude,
     claudeVersion: version?.status === 0 ? version.stdout.trim() : null,
-    ready: Boolean(claude && fs.existsSync(project.projectRoot))
+    workbuddy,
+    workbuddyVersion: workbuddyVersion?.status === 0 ? workbuddyVersion.stdout.trim() : null,
+    ready: Boolean(findAssistant(project.assistant) && fs.existsSync(project.projectRoot))
   });
 }
 
 function runHidden(opts) {
   const project = getProject(opts);
-  const claude = findClaude();
+  const assistant = findAssistant(project.assistant);
   const title = opts.title || "Assistant task";
   const body = opts.body || fail("Missing --body.");
-  if (!claude) return printJson(assistantUnavailable(project, { title, body }));
+  if (!assistant) return printJson(assistantUnavailable(project, { title, body }));
   const run = createRun(project, title, body);
   fs.mkdirSync(run.sessionDir, { recursive: true });
   writeRound(project, run, run.rounds[0]);
   const output = withProjectLock(project, () => {
-    const launched = runClaudeRound(project, run, run.rounds[0], claude, opts);
+    const launched = runAssistantRound(project, run, run.rounds[0], assistant, opts);
     saveRun(project, run);
     const report = inspectReport(run.reportFile);
     return baseOutput(run, { status: launched ? "launched" : "launch_failed", report });
@@ -140,7 +179,8 @@ function continueHidden(opts) {
     runsDir: path.join(run.stateRoot, "runs"),
     taskDir: run.taskDir || path.join(run.stateRoot, "tasks"),
     reportDir: run.reportDir || path.join(run.stateRoot, "reports"),
-    contextFiles: run.contextFiles || []
+    contextFiles: run.contextFiles || [],
+    assistant: normalizeAssistant(opts.assistant || run.assistant || "claude")
   };
   const round = createRound(project, run, opts.title || `${run.title} follow-up`, body, run.rounds.length + 1);
   run.rounds.push(round);
@@ -148,10 +188,10 @@ function continueHidden(opts) {
   run.reportFile = round.reportFile;
   writeRound(project, run, round);
   run.windowTitle = `AgentCommander-${run.runId}-round-${round.round}`;
-  const claude = findClaude();
-  if (!claude) return printJson(assistantUnavailable(project, { title: round.title, body, runId }));
+  const assistant = findAssistant(project.assistant);
+  if (!assistant) return printJson(assistantUnavailable(project, { title: round.title, body, runId }));
   const output = withProjectLock(project, () => {
-    const launched = runClaudeRound(project, run, round, claude, opts);
+    const launched = runAssistantRound(project, run, round, assistant, opts);
     round.launched = launched;
     saveRun(project, run);
     const report = inspectReport(round.reportFile);
@@ -161,13 +201,16 @@ function continueHidden(opts) {
 }
 
 function assistantUnavailable(project, details = {}) {
+  const assistantName = project.assistant === "workbuddy" ? "workbuddy" : "claude-code";
   return {
     status: "assistant_unavailable",
-    assistant: "claude-code",
+    assistant: assistantName,
     projectRoot: project.projectRoot,
-    reason: "Claude Code command not found. Install Claude Code and ensure claude.cmd or claude is on PATH.",
+    reason: project.assistant === "workbuddy"
+      ? "WorkBuddy CLI command not found. Install WorkBuddy or set WORKBUDDY_CLI to the codebuddy CLI path."
+      : "Claude Code command not found. Install Claude Code and ensure claude.cmd or claude is on PATH.",
     codexAction: "continue_without_assistant",
-    message: "Delegated assistant collaboration was skipped because Claude Code is not installed or not available on PATH. Codex should continue the user's task directly and mention the skipped assistant only when relevant.",
+    message: "Delegated assistant collaboration was skipped because the requested assistant is not installed or not available. Codex should continue the user's task directly and mention the skipped assistant only when relevant.",
     ...details
   };
 }
@@ -195,6 +238,7 @@ function createRun(project, title, body) {
     title,
     slug: slug(title),
     createdAt: new Date().toISOString(),
+    assistant: project.assistant,
     projectRoot: project.projectRoot,
     stateRoot: project.stateRoot,
     taskDir: project.taskDir,
@@ -249,6 +293,11 @@ function writeRound(project, run, round) {
   fs.writeFileSync(round.promptFile, prompt, "utf8");
 }
 
+function runAssistantRound(project, run, round, assistant, opts) {
+  if (project.assistant === "workbuddy") return runWorkBuddyRound(project, run, round, assistant, opts);
+  return runClaudeRound(project, run, round, assistant, opts);
+}
+
 function runClaudeRound(project, run, round, claude, opts) {
   const permission = opts.permissionMode || "bypassPermissions";
   const args = [
@@ -263,6 +312,35 @@ function runClaudeRound(project, run, round, claude, opts) {
   ];
   const prompt = fs.readFileSync(round.promptFile, "utf8");
   const result = spawnCmd(claude.path || claude.command, args, {
+    cwd: project.projectRoot,
+    input: prompt,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 1024 * 1024 * 20
+  });
+  fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stdout.txt`), result.stdout || "", "utf8");
+  fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stderr.txt`), result.stderr || "", "utf8");
+  round.exitCode = result.status;
+  saveRun(project, run);
+  waitForReportWithResends(run, round, opts);
+  return result.status === 0;
+}
+
+function runWorkBuddyRound(project, run, round, workbuddy, opts) {
+  const permission = opts.permissionMode || "bypassPermissions";
+  const args = [
+    "-p",
+    "--output-format",
+    "text",
+    "-y",
+    "--permission-mode",
+    permission,
+    "--add-dir",
+    project.projectRoot
+  ];
+  if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
+  const prompt = fs.readFileSync(round.promptFile, "utf8");
+  const result = spawnAssistant(workbuddy, args, {
     cwd: project.projectRoot,
     input: prompt,
     encoding: "utf8",
@@ -376,6 +454,11 @@ function spawnCmd(command, args, options = {}) {
   return spawnSync(command, args, { encoding: "utf8", ...options });
 }
 
+function spawnAssistant(assistant, args, options = {}) {
+  if (assistant.runner === "node") return spawnSync(process.execPath, [assistant.path, ...args], { encoding: "utf8", ...options });
+  return spawnCmd(assistant.path || assistant.command, args, options);
+}
+
 function sleep(ms) {
   spawnSync(process.platform === "win32" ? "timeout.exe" : "sleep", process.platform === "win32" ? ["/t", String(Math.ceil(ms / 1000)), "/nobreak"] : [String(ms / 1000)], {
     stdio: "ignore"
@@ -417,6 +500,21 @@ function normalizeContextFiles(projectRoot, value) {
   return list.map((item) => resolveProjectPath(projectRoot, item));
 }
 
+function assistantContextFiles(config, assistant) {
+  const byAssistant = config.assistantContextFiles || {};
+  const specific = assistant === "workbuddy"
+    ? firstValue(config.workbuddyContextFiles, byAssistant.workbuddy)
+    : firstValue(config.claudeContextFiles, byAssistant.claude, byAssistant.claudeCode);
+  return specific || [];
+}
+
+function normalizeAssistant(value) {
+  const assistant = String(value || "claude").trim().toLowerCase();
+  if (["claude", "claude-code", "claudecode"].includes(assistant)) return "claude";
+  if (["workbuddy", "codebuddy", "cbc"].includes(assistant)) return "workbuddy";
+  fail(`Unknown assistant: ${value}`);
+}
+
 function formatContextFiles(files) {
   if (!files || !files.length) return "None.";
   return files.map((file) => `- ${file}`).join("\n");
@@ -454,9 +552,9 @@ function printHelp() {
   process.stdout.write(`Codex Agent Commander
 
 Commands:
-  run-hidden --project-root <folder> --title <title> --body <text>
-  doctor --project-root <folder>
-  continue-hidden --project-root <folder> --run <run_id> --body <text>
+  run-hidden --assistant claude|workbuddy --project-root <folder> --title <title> --body <text>
+  doctor --assistant claude|workbuddy --project-root <folder>
+  continue-hidden --assistant claude|workbuddy --project-root <folder> --run <run_id> --body <text>
   check --run <run_id>
 `);
 }

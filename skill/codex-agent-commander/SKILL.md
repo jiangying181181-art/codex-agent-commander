@@ -23,14 +23,16 @@ The user does not need to say "use Claude Code". Decide whether delegation is us
 Use the bundled script in this skill folder:
 
 ```powershell
-node "<this skill folder>\scripts\agent-commander.mjs" run-hidden --project-root "<current project folder>" --title "<short task title>" --body "<task instructions>"
+node "<this skill folder>\scripts\agent-commander.mjs" run-hidden --assistant claude --project-root "<current project folder>" --title "<short task title>" --body "<task instructions>"
 ```
 
 For follow-up rounds under the same run:
 
 ```powershell
-node "<this skill folder>\scripts\agent-commander.mjs" continue-hidden --project-root "<current project folder>" --run <run_id> --body "<follow-up instructions>"
+node "<this skill folder>\scripts\agent-commander.mjs" continue-hidden --assistant claude --project-root "<current project folder>" --run <run_id> --body "<follow-up instructions>"
 ```
+
+Use `--assistant workbuddy` when delegating to WorkBuddy. Prefer the WorkBuddy bundled `codebuddy` CLI in background mode; do not control the WorkBuddy desktop UI unless the user explicitly asks for visible desktop automation.
 
 Use the Codex conversation's current working project folder as `project-root`. Do not use the skill install folder unless the user is actually working on this bridge project.
 
@@ -45,7 +47,11 @@ Supported config fields:
   "stateRoot": ".agent-commander",
   "taskDir": ".agent-commander/tasks",
   "reportDir": ".agent-commander/reports",
-  "contextFiles": []
+  "contextFiles": [],
+  "assistantContextFiles": {
+    "claude": [],
+    "workbuddy": []
+  }
 }
 ```
 
@@ -57,7 +63,11 @@ Run Claude Code in the background by default. Default to `bypassPermissions` for
 
 Do not disturb the user's desktop session. Do not overwrite the clipboard. Do not inject keystrokes into the user's active app. Do not open multiple assistant windows. Use the project lock and run assistant work sequentially.
 
-If Claude Code is missing, the bridge returns `assistant_unavailable` with `codexAction: continue_without_assistant`. Treat this as a delegation skip, not as a failure of the user's task. Continue the work directly in Codex and mention that assistant collaboration was unavailable only when it matters to the user.
+If Claude Code or WorkBuddy is missing, the bridge returns `assistant_unavailable` with `codexAction: continue_without_assistant`. Treat this as a delegation skip, not as a failure of the user's task. Continue the work directly in Codex and mention that assistant collaboration was unavailable only when it matters to the user.
+
+## WorkBuddy Defaults
+
+Use WorkBuddy through its `codebuddy` CLI with `-p`, `-y`, `--permission-mode bypassPermissions`, and `--add-dir <project root>`. WorkBuddy is a desktop app, but the bridge should not click, type, or paste into the visible desktop window by default.
 
 ## Report Status
 
