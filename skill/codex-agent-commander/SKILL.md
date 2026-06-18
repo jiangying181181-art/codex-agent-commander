@@ -18,6 +18,20 @@ The user does not need to say "use Claude Code". Decide whether delegation is us
 5. Codex reads the report and judges whether it is enough.
 6. Codex continues, reassigns, or finishes. Codex remains responsible for the final answer.
 
+## Universal Assistant Routing
+
+Do not make assistant routing project-specific. Any named project is only a project configuration example.
+
+Choose assistants by task type:
+
+- Use Codex directly for primary implementation, architecture decisions, product judgment, and final delivery.
+- Use Claude Code for code review, architectural risk review, logic audits, regression risk checks, and second-opinion analysis.
+- Use WorkBuddy for runtime checks, environment checks, UI or workflow verification, dry-run validation, local acceptance checks, and evidence collection.
+- Use both when a task needs independent code-risk review plus runtime or UI acceptance. Read both reports and make the final decision in Codex.
+- If an assistant is unavailable or not a good fit, continue in Codex without blocking the user's task.
+
+Respect project-local configuration for context files and report folders. Do not hard-code a project name, product name, path, or domain into the generic routing policy.
+
 ## Bridge Script
 
 Use the bundled script in this skill folder:

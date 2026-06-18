@@ -4,6 +4,8 @@ Codex Agent Commander is a Codex skill and local bridge for using assistant agen
 
 Codex remains the commander. Claude Code and other agents are helpers for bounded audits, tests, verification, and follow-up checks.
 
+Assistant routing is project-neutral. Named projects should be handled through project-local configuration, not hard-coded into the bridge.
+
 ## What It Does
 
 - Runs Claude Code in the background by default.
@@ -18,6 +20,15 @@ Codex remains the commander. Claude Code and other agents are helpers for bounde
 - Does not use or overwrite the user's system clipboard.
 - Does not inject keystrokes into the user's active desktop session.
 - Does not open multiple assistant windows or disturb the user's current app focus, typing, or clipboard.
+
+## Assistant Routing
+
+- Codex: primary implementation, architecture decisions, product judgment, and final delivery.
+- Claude Code: code review, architecture or logic audits, regression risk checks, and second-opinion analysis.
+- WorkBuddy: runtime checks, environment checks, UI or workflow verification, dry-run validation, local acceptance checks, and evidence collection.
+- Claude Code plus WorkBuddy: use both when a task needs independent code-risk review and runtime acceptance evidence.
+
+The same routing applies to any project. Project-specific instructions belong in `.agent-commander/config.json`.
 
 ## Requirements
 
