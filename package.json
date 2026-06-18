@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "A Codex skill and local bridge for commanding visible assistant agents such as Claude Code.",
+  "description": "A Codex skill and local bridge for commanding local assistant agents such as Claude Code.",
   "bin": {
     "codex-agent-commander": "./scripts/agent-commander.mjs"
   },
