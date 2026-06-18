@@ -328,6 +328,7 @@ function runClaudeRound(project, run, round, claude, opts) {
 
 function runWorkBuddyRound(project, run, round, workbuddy, opts) {
   const permission = opts.permissionMode || "bypassPermissions";
+  const prompt = fs.readFileSync(round.promptFile, "utf8");
   const args = [
     "-p",
     "--output-format",
@@ -335,16 +336,17 @@ function runWorkBuddyRound(project, run, round, workbuddy, opts) {
     "-y",
     "--permission-mode",
     permission,
+    prompt,
     "--add-dir",
     project.projectRoot
   ];
   if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
-  const prompt = fs.readFileSync(round.promptFile, "utf8");
+  const timeoutMs = Number(opts.timeoutMs || opts.assistantTimeoutMs || 10 * 60 * 1000);
   const result = spawnAssistant(workbuddy, args, {
     cwd: project.projectRoot,
-    input: prompt,
     encoding: "utf8",
     windowsHide: true,
+    timeout: timeoutMs,
     maxBuffer: 1024 * 1024 * 20
   });
   fs.writeFileSync(path.join(run.sessionDir, `round-${round.round}.stdout.txt`), result.stdout || "", "utf8");
