@@ -1,0 +1,18 @@
+{
+  "name": "codex-agent-commander",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "A Codex skill and local bridge for commanding visible assistant agents such as Claude Code.",
+  "bin": {
+    "codex-agent-commander": "./scripts/agent-commander.mjs"
+  },
+  "scripts": {
+    "doctor": "node ./scripts/agent-commander.mjs doctor",
+    "self-test": "node ./scripts/agent-commander.mjs self-test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
