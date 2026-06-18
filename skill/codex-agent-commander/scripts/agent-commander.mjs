@@ -82,6 +82,7 @@ function getProject(opts) {
 }
 
 function findClaude() {
+  if (process.env.CODEX_AGENT_COMMANDER_DISABLE_CLAUDE === "1") return null;
   const candidates = process.platform === "win32" ? ["claude.cmd", "claude"] : ["claude"];
   for (const candidate of candidates) {
     const result = spawnSync(process.platform === "win32" ? "where.exe" : "which", [candidate], { encoding: "utf8" });
@@ -114,9 +115,9 @@ function doctor(opts) {
 function runHidden(opts) {
   const project = getProject(opts);
   const claude = findClaude();
-  if (!claude) fail("Claude Code command not found. Install Claude Code and ensure claude.cmd or claude is on PATH.");
   const title = opts.title || "Assistant task";
   const body = opts.body || fail("Missing --body.");
+  if (!claude) return printJson(assistantUnavailable(project, { title, body }));
   const run = createRun(project, title, body);
   fs.mkdirSync(run.sessionDir, { recursive: true });
   writeRound(project, run, run.rounds[0]);
@@ -148,7 +149,7 @@ function continueHidden(opts) {
   writeRound(project, run, round);
   run.windowTitle = `AgentCommander-${run.runId}-round-${round.round}`;
   const claude = findClaude();
-  if (!claude) fail("Claude Code command not found. Install Claude Code and ensure claude.cmd or claude is on PATH.");
+  if (!claude) return printJson(assistantUnavailable(project, { title: round.title, body, runId }));
   const output = withProjectLock(project, () => {
     const launched = runClaudeRound(project, run, round, claude, opts);
     round.launched = launched;
@@ -157,6 +158,18 @@ function continueHidden(opts) {
     return baseOutput(run, { status: "continued", round: round.round, launched, report });
   });
   printJson(output);
+}
+
+function assistantUnavailable(project, details = {}) {
+  return {
+    status: "assistant_unavailable",
+    assistant: "claude-code",
+    projectRoot: project.projectRoot,
+    reason: "Claude Code command not found. Install Claude Code and ensure claude.cmd or claude is on PATH.",
+    codexAction: "continue_without_assistant",
+    message: "Delegated assistant collaboration was skipped because Claude Code is not installed or not available on PATH. Codex should continue the user's task directly and mention the skipped assistant only when relevant.",
+    ...details
+  };
 }
 
 function checkRun(opts) {

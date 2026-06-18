@@ -57,6 +57,8 @@ Run Claude Code in the background by default. Default to `bypassPermissions` for
 
 Do not disturb the user's desktop session. Do not overwrite the clipboard. Do not inject keystrokes into the user's active app. Do not open multiple assistant windows. Use the project lock and run assistant work sequentially.
 
+If Claude Code is missing, the bridge returns `assistant_unavailable` with `codexAction: continue_without_assistant`. Treat this as a delegation skip, not as a failure of the user's task. Continue the work directly in Codex and mention that assistant collaboration was unavailable only when it matters to the user.
+
 ## Report Status
 
 Ask the assistant to write a Markdown report with:

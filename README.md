@@ -13,6 +13,7 @@ Codex remains the commander. Claude Code and other agents are helpers for bounde
 - Uses `bypassPermissions` by default for delegated Claude Code work.
 - Supports follow-up rounds.
 - Uses a project lock so only one assistant task runs at a time.
+- If Claude Code is missing, reports `assistant_unavailable` and lets Codex continue the task directly.
 - Does not use or overwrite the user's system clipboard.
 - Does not inject keystrokes into the user's active desktop session.
 - Does not open multiple assistant windows or disturb the user's current app focus, typing, or clipboard.
