@@ -4,6 +4,13 @@
   "private": false,
   "type": "module",
   "description": "A Codex skill and local bridge for commanding local assistant agents such as Claude Code.",
+  "files": [
+    "README.md",
+    "LICENSE",
+    "scripts/",
+    "skill/",
+    "templates/"
+  ],
   "bin": {
     "codex-agent-commander": "./scripts/agent-commander.mjs"
   },
