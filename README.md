@@ -53,6 +53,8 @@ To verify that an assistant can actually write a report:
 node .\scripts\agent-commander.mjs doctor --assistant workbuddy --project-root "C:\path\to\your\project" --doctor-run
 ```
 
+WorkBuddy report-writing checks use `--max-turns 8` by default. If a run reports `Max turns exceeded`, treat it as an invocation budget problem and retry with a larger `--max-turns` value before treating it as a project finding.
+
 ## Dry Run
 
 Generate task, prompt, report path, and index entries without launching an assistant:
@@ -72,6 +74,8 @@ To use WorkBuddy:
 ```powershell
 node .\scripts\agent-commander.mjs run-hidden --assistant workbuddy --project-root "C:\path\to\your\project" --title "Runtime check" --body "Check the project and write a report only."
 ```
+
+WorkBuddy background runs automatically pass `--max-turns 8` unless you override it. Use a larger value for tasks that need to read multiple context files, inspect UI state, or produce longer evidence reports.
 
 ## Continue The Same Run
 

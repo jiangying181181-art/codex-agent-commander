@@ -85,6 +85,8 @@ The bridge archives stale lock files automatically when the recorded process is 
 
 Use WorkBuddy through its `codebuddy` CLI with `-p`, `-y`, `--permission-mode bypassPermissions`, and `--add-dir <project root>`. WorkBuddy is a desktop app, but the bridge should not click, type, or paste into the visible desktop window by default.
 
+WorkBuddy runs default to `--max-turns 8` so the assistant has enough budget to read context and write the required report. If stdout says `Max turns exceeded`, treat it as an invocation budget problem and retry with a larger `--max-turns` value before treating it as a project finding.
+
 ## Diagnostics
 
 Use `dry-run` to generate task files and report paths without launching an assistant. Use `doctor --doctor-run` only when a real assistant write-report check is needed. Read `<reportDir>\index.json` for the run history when available.

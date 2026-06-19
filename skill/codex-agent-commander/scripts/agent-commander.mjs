@@ -11,6 +11,7 @@ const repoRoot = path.resolve(scriptDir, "..");
 const templatePath = path.join(repoRoot, "templates", "assistant-task.md");
 const statusValues = new Set(["done", "needs_followup", "blocked", "failed"]);
 const booleanArgs = new Set(["help", "dryRun", "doctorRun"]);
+const defaultWorkBuddyMaxTurns = 8;
 
 main();
 
@@ -169,7 +170,11 @@ function runDoctorWriteReportCheck(project, assistant, opts) {
   fs.mkdirSync(run.sessionDir, { recursive: true });
   writeRound(project, run, run.rounds[0]);
   return withProjectLock(project, () => {
-    const assistantResult = runAssistantRound(project, run, run.rounds[0], assistant, { ...opts, waitMs: opts.waitMs || 120000, maxTurns: opts.maxTurns || 2 });
+    const assistantResult = runAssistantRound(project, run, run.rounds[0], assistant, {
+      ...opts,
+      waitMs: opts.waitMs || 120000,
+      maxTurns: opts.maxTurns || (project.assistant === "workbuddy" ? defaultWorkBuddyMaxTurns : 2)
+    });
     saveRun(project, run);
     const report = inspectReport(run.reportFile);
     updateReportIndex(project, run, run.rounds[0], report, `doctor_${assistantResult.status}`);
@@ -385,7 +390,7 @@ function runWorkBuddyRound(project, run, round, workbuddy, opts) {
     "--add-dir",
     project.projectRoot
   ];
-  if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
+  args.push("--max-turns", String(opts.maxTurns || defaultWorkBuddyMaxTurns));
   const result = spawnAssistant(workbuddy, args, {
     cwd: project.projectRoot,
     encoding: "utf8",
@@ -677,6 +682,9 @@ Commands:
   doctor --assistant claude|workbuddy --project-root <folder> [--doctor-run]
   continue-hidden --assistant claude|workbuddy --project-root <folder> --run <run_id> --body <text>
   check --run <run_id>
+
+Defaults:
+  WorkBuddy runs use --max-turns ${defaultWorkBuddyMaxTurns} unless overridden.
 `);
 }
 
