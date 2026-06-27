@@ -8,6 +8,8 @@ Bridge metadata:
 
 - run_id: {runId}
 - round: {round}
+- assistant: {assistant}
+- assistant_model: {assistantModel}
 - project_root: {projectRoot}
 - instruction_file: {instructionFile}
 - required_report_file: {reportFile}

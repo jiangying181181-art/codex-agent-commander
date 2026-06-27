@@ -12,6 +12,7 @@ const templatePath = path.join(repoRoot, "templates", "assistant-task.md");
 const statusValues = new Set(["done", "needs_followup", "blocked", "failed"]);
 const booleanArgs = new Set(["help", "dryRun", "doctorRun"]);
 const defaultWorkBuddyMaxTurns = 8;
+const defaultWorkBuddyModel = "minimax-m3";
 
 main();
 
@@ -71,6 +72,7 @@ function getProject(opts) {
   const configFile = path.resolve(opts.config || path.join(projectRoot, ".agent-commander", "config.json"));
   const config = readJsonIfExists(configFile);
   const assistant = normalizeAssistant(opts.assistant || config.defaultAssistant || "claude");
+  const model = resolveAssistantModel(assistant, opts, config);
   const stateRoot = resolveProjectPath(projectRoot, firstValue(opts.stateRoot, config.stateRoot, ".agent-commander"));
   const taskDir = firstValue(opts.taskDir, config.taskDir);
   const reportDir = firstValue(opts.reportDir, config.reportDir);
@@ -86,8 +88,17 @@ function getProject(opts) {
     runsDir: path.join(stateRoot, "runs"),
     taskDir: taskDir ? resolveProjectPath(projectRoot, taskDir) : path.join(stateRoot, "tasks"),
     reportDir: reportDir ? resolveProjectPath(projectRoot, reportDir) : path.join(stateRoot, "reports"),
-    contextFiles
+    contextFiles,
+    model
   };
+}
+
+function resolveAssistantModel(assistant, opts, config) {
+  const assistantModels = config.assistantModels || {};
+  if (assistant === "workbuddy") {
+    return firstValue(opts.model, config.workbuddyModel, assistantModels.workbuddy, config.defaultModel, defaultWorkBuddyModel);
+  }
+  return firstValue(opts.model, config.claudeModel, assistantModels.claude);
 }
 
 function findAssistant(assistant) {
@@ -142,6 +153,7 @@ function doctor(opts) {
   printJson({
     platform: process.platform,
     assistant: project.assistant,
+    model: project.model || null,
     projectRoot: project.projectRoot,
     configFile: project.configFile,
     stateRoot: project.stateRoot,
@@ -210,6 +222,7 @@ function continueHidden(opts) {
   const runId = opts.run || opts._[0] || fail("Missing --run.");
   const body = opts.body || fail("Missing --body.");
   const run = loadRunById(runId, opts);
+  const continuedAssistant = normalizeAssistant(opts.assistant || run.assistant || "claude");
   const project = {
     projectRoot: run.projectRoot,
     stateRoot: run.stateRoot,
@@ -217,7 +230,8 @@ function continueHidden(opts) {
     taskDir: run.taskDir || path.join(run.stateRoot, "tasks"),
     reportDir: run.reportDir || path.join(run.stateRoot, "reports"),
     contextFiles: run.contextFiles || [],
-    assistant: normalizeAssistant(opts.assistant || run.assistant || "claude")
+    assistant: continuedAssistant,
+    model: firstValue(opts.model, run.model, continuedAssistant === "workbuddy" ? defaultWorkBuddyModel : undefined)
   };
   const round = createRound(project, run, opts.title || `${run.title} follow-up`, body, run.rounds.length + 1);
   run.rounds.push(round);
@@ -286,6 +300,7 @@ function createRun(project, title, body) {
     slug: slug(title),
     createdAt: new Date().toISOString(),
     assistant: project.assistant,
+    model: project.model || null,
     projectRoot: project.projectRoot,
     stateRoot: project.stateRoot,
     taskDir: project.taskDir,
@@ -326,6 +341,8 @@ function writeRound(project, run, round) {
     title: round.title,
     body: round.body,
     projectRoot: run.projectRoot,
+    assistant: project.assistant,
+    assistantModel: project.model || (project.assistant === "claude" ? "external default (cc switch or Claude Code config)" : "not specified"),
     instructionFile: round.instructionFile,
     reportFile: round.reportFile,
     contextFiles: formatContextFiles(project.contextFiles)
@@ -354,9 +371,9 @@ function runClaudeRound(project, run, round, claude, opts) {
     "--permission-mode",
     permission,
     `--add-dir=${project.projectRoot}`,
-    "--name",
-    run.windowTitle
   ];
+  if (project.model) args.push("--model", project.model);
+  args.push("--name", run.windowTitle);
   const prompt = fs.readFileSync(round.promptFile, "utf8");
   const result = spawnCmd(claude.path || claude.command, args, {
     cwd: project.projectRoot,
@@ -385,11 +402,14 @@ function runWorkBuddyRound(project, run, round, workbuddy, opts) {
     "text",
     "-y",
     "--permission-mode",
-    permission,
+    permission
+  ];
+  if (project.model) args.push("--model", project.model);
+  args.push(
     prompt,
     "--add-dir",
     project.projectRoot
-  ];
+  );
   args.push("--max-turns", String(opts.maxTurns || defaultWorkBuddyMaxTurns));
   const result = spawnAssistant(workbuddy, args, {
     cwd: project.projectRoot,
@@ -524,6 +544,7 @@ function updateReportIndex(project, run, round, report, runStatus) {
     runId: run.runId,
     round: round.round,
     assistant: run.assistant,
+    model: run.model || null,
     title: round.title || run.title,
     status: runStatus,
     reportStatus: report.reportStatus,
@@ -562,6 +583,7 @@ function baseOutput(run, extra) {
   return {
     ...extra,
     runId: run.runId,
+    model: run.model || null,
     projectRoot: run.projectRoot,
     instructionFile: run.instructionFile,
     reportFile: run.reportFile,
