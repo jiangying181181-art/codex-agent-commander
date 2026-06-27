@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,7 +10,7 @@ const scriptDir = path.dirname(__filename);
 const repoRoot = path.resolve(scriptDir, "..");
 const templatePath = path.join(repoRoot, "templates", "assistant-task.md");
 const statusValues = new Set(["done", "needs_followup", "blocked", "failed"]);
-const booleanArgs = new Set(["help", "dryRun", "doctorRun"]);
+const booleanArgs = new Set(["help", "dryRun", "doctorRun", "wait"]);
 const defaultWorkBuddyMaxTurns = 8;
 const defaultWorkBuddyModel = "minimax-m3";
 
@@ -27,6 +27,7 @@ function main() {
     if (command === "open-visible") return runHidden(opts);
     if (command === "continue-hidden") return continueHidden(opts);
     if (command === "continue-visible") return continueHidden(opts);
+    if (command === "worker-round") return workerRound(opts);
     if (command === "check") return checkRun(opts);
     if (command === "close-visible") return closeVisible(opts);
     if (command === "self-test") return selfTest(opts);
@@ -202,8 +203,15 @@ function runHidden(opts) {
   const run = createRun(project, title, body);
   fs.mkdirSync(run.sessionDir, { recursive: true });
   writeRound(project, run, run.rounds[0]);
+  saveRun(project, run);
   if (opts.dryRun) return finishDryRun(project, run, run.rounds[0]);
   if (!assistant) return printJson(assistantUnavailable(project, { title, body }));
+  if (!opts.wait) {
+    const launched = launchWorker(project, run, run.rounds[0], opts);
+    const report = inspectReport(run.reportFile);
+    updateReportIndex(project, run, run.rounds[0], report, "launched");
+    return printJson(baseOutput(run, { status: "launched", round: 1, workerPid: launched.pid, report }));
+  }
   const output = withProjectLock(project, () => {
     const assistantResult = runAssistantRound(project, run, run.rounds[0], assistant, opts);
     saveRun(project, run);
@@ -239,9 +247,16 @@ function continueHidden(opts) {
   run.reportFile = round.reportFile;
   writeRound(project, run, round);
   run.windowTitle = `AgentCommander-${run.runId}-round-${round.round}`;
+  saveRun(project, run);
   const assistant = findAssistant(project.assistant);
   if (opts.dryRun) return finishDryRun(project, run, round);
   if (!assistant) return printJson(assistantUnavailable(project, { title: round.title, body, runId }));
+  if (!opts.wait) {
+    const launched = launchWorker(project, run, round, opts);
+    const report = inspectReport(round.reportFile);
+    updateReportIndex(project, run, round, report, "launched");
+    return printJson(baseOutput(run, { status: "launched", round: round.round, workerPid: launched.pid, report }));
+  }
   const output = withProjectLock(project, () => {
     const assistantResult = runAssistantRound(project, run, round, assistant, opts);
     round.launched = assistantResult.ok;
@@ -251,6 +266,98 @@ function continueHidden(opts) {
     return baseOutput(run, { status: "continued", round: round.round, assistantResult, report });
   });
   printJson(output);
+}
+
+function workerRound(opts) {
+  const runId = opts.run || fail("Missing --run.");
+  const roundNumber = Number(opts.round || 1);
+  const run = loadRunById(runId, opts);
+  const round = run.rounds.find((item) => Number(item.round) === roundNumber) || fail(`Round not found: ${roundNumber}`);
+  const project = projectFromRun(run, opts);
+  const assistant = findAssistant(project.assistant);
+  if (!assistant) {
+    const report = inspectReport(round.reportFile);
+    updateReportIndex(project, run, round, report, "assistant_unavailable");
+    return printJson(assistantUnavailable(project, { title: round.title, body: round.body, runId }));
+  }
+  const output = withProjectLock(project, () => {
+    const assistantResult = runAssistantRound(project, run, round, assistant, opts);
+    round.launched = assistantResult.ok;
+    saveRun(project, run);
+    const report = inspectReport(round.reportFile);
+    updateReportIndex(project, run, round, report, assistantResult.status);
+    return baseOutput(run, { status: assistantResult.status, round: round.round, assistantResult, report });
+  });
+  printJson(output);
+}
+
+function projectFromRun(run, opts = {}) {
+  const continuedAssistant = normalizeAssistant(opts.assistant || run.assistant || "claude");
+  return {
+    projectRoot: run.projectRoot,
+    stateRoot: run.stateRoot,
+    runsDir: path.join(run.stateRoot, "runs"),
+    taskDir: run.taskDir || path.join(run.stateRoot, "tasks"),
+    reportDir: run.reportDir || path.join(run.stateRoot, "reports"),
+    contextFiles: run.contextFiles || [],
+    assistant: continuedAssistant,
+    model: firstValue(opts.model, run.model, continuedAssistant === "workbuddy" ? defaultWorkBuddyModel : undefined)
+  };
+}
+
+function launchWorker(project, run, round, opts) {
+  fs.mkdirSync(run.sessionDir, { recursive: true });
+  const args = [
+    __filename,
+    "worker-round",
+    "--project-root",
+    project.projectRoot,
+    "--run",
+    run.runId,
+    "--round",
+    String(round.round)
+  ];
+  copyWorkerOption(args, opts, "assistant");
+  copyWorkerOption(args, opts, "model");
+  copyWorkerOption(args, opts, "permissionMode", "permission-mode");
+  copyWorkerOption(args, opts, "timeoutMs", "timeout-ms");
+  copyWorkerOption(args, opts, "assistantTimeoutMs", "assistant-timeout-ms");
+  copyWorkerOption(args, opts, "waitMs", "wait-ms");
+  copyWorkerOption(args, opts, "maxTurns", "max-turns");
+  const launched = startBackgroundProcess(project, args);
+  round.workerPid = launched.pid;
+  round.workerStartedAt = new Date().toISOString();
+  saveRun(project, run);
+  return launched;
+}
+
+function startBackgroundProcess(project, args) {
+  if (process.platform === "win32") {
+    const argList = args.map(psLiteral).join(", ");
+    const script = [
+      `$p = Start-Process -FilePath ${psLiteral(process.execPath)} -ArgumentList @(${argList}) -WorkingDirectory ${psLiteral(project.projectRoot)} -WindowStyle Hidden -PassThru`,
+      "[Console]::Out.Write($p.Id)"
+    ].join("; ");
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      encoding: "utf8",
+      windowsHide: true
+    });
+    if (result.status !== 0) fail(`Failed to launch background worker: ${result.stderr || result.stdout}`);
+    return { pid: Number(String(result.stdout || "").trim()) || null };
+  }
+  const child = spawn(process.execPath, args, {
+    cwd: project.projectRoot,
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+
+function copyWorkerOption(args, opts, key, flag = key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)) {
+  if (opts[key] === undefined || opts[key] === null || opts[key] === "") return;
+  args.push(`--${flag}`, String(opts[key]));
 }
 
 function finishDryRun(project, run, round) {
@@ -279,7 +386,10 @@ function assistantUnavailable(project, details = {}) {
 function checkRun(opts) {
   const runId = opts.run || opts._[0] || fail("Missing --run.");
   const run = loadRunById(runId, opts);
-  printJson(baseOutput(run, { status: "checked", report: inspectReport(run.reportFile) }));
+  const round = run.rounds.find((item) => item.reportFile === run.reportFile) || run.rounds[run.rounds.length - 1];
+  const report = inspectReport(run.reportFile);
+  const workerAlive = round?.workerPid ? processAlive(Number(round.workerPid)) : false;
+  printJson(baseOutput(run, { status: workerAlive && !report.reportExists ? "running" : "checked", round: round?.round || null, workerPid: round?.workerPid || null, workerAlive, report }));
 }
 
 function closeVisible(opts) {
@@ -691,21 +801,27 @@ function psQuote(value) {
   return String(value).replace(/'/g, "''");
 }
 
+function psLiteral(value) {
+  return `'${psQuote(value)}'`;
+}
+
 function printJson(value) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  fs.writeSync(1, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function printHelp() {
-  process.stdout.write(`Codex Agent Commander
+  fs.writeSync(1, `Codex Agent Commander
 
 Commands:
-  run-hidden --assistant claude|workbuddy --project-root <folder> --title <title> --body <text>
+  run-hidden --assistant claude|workbuddy --project-root <folder> --title <title> --body <text> [--wait]
   dry-run --assistant claude|workbuddy --project-root <folder> --title <title> --body <text>
   doctor --assistant claude|workbuddy --project-root <folder> [--doctor-run]
-  continue-hidden --assistant claude|workbuddy --project-root <folder> --run <run_id> --body <text>
+  continue-hidden --assistant claude|workbuddy --project-root <folder> --run <run_id> --body <text> [--wait]
   check --run <run_id>
 
 Defaults:
+  run-hidden and continue-hidden launch a background worker and return immediately.
+  Add --wait when a synchronous blocking run is required.
   WorkBuddy runs use --max-turns ${defaultWorkBuddyMaxTurns} unless overridden.
 `);
 }

@@ -40,6 +40,8 @@ Use the bundled script in this skill folder:
 node "<this skill folder>\scripts\agent-commander.mjs" run-hidden --assistant claude --project-root "<current project folder>" --title "<short task title>" --body "<task instructions>"
 ```
 
+`run-hidden` launches a hidden background worker and returns quickly with `runId`, `workerPid`, instruction path, and report path. Use `check --run <run_id>` to inspect status and read the report. Add `--wait` only when a deliberately blocking run is required.
+
 For follow-up rounds under the same run:
 
 ```powershell
@@ -73,7 +75,7 @@ Relative paths are resolved from the project root.
 
 ## Claude Code Defaults
 
-Run Claude Code in the background by default. Always default delegated assistant work to `bypassPermissions` unless the user explicitly asks for a different mode in the current task.
+Run Claude Code in the background by default. The bridge should return immediately after the worker starts; then poll with `check`. Always default delegated assistant work to `bypassPermissions` unless the user explicitly asks for a different mode in the current task.
 
 Do not disturb the user's desktop session. Do not overwrite the clipboard. Do not inject keystrokes into the user's active app. Do not open multiple assistant windows. Use the project lock and run assistant work sequentially.
 
@@ -89,7 +91,7 @@ WorkBuddy runs default to `--max-turns 8` so the assistant has enough budget to 
 
 ## Diagnostics
 
-Use `dry-run` to generate task files and report paths without launching an assistant. Use `doctor --doctor-run` only when a real assistant write-report check is needed. Read `<reportDir>\index.json` for the run history when available.
+Use `dry-run` to generate task files and report paths without launching an assistant. Use `doctor --doctor-run` only when a real assistant write-report check is needed. Use `check --run <run_id>` after background launch. Read `<reportDir>\index.json` for the run history when available.
 
 ## Report Status
 

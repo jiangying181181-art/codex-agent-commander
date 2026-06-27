@@ -69,6 +69,8 @@ node .\scripts\agent-commander.mjs dry-run --assistant claude --project-root "C:
 node .\scripts\agent-commander.mjs run-hidden --assistant claude --project-root "C:\path\to\your\project" --title "Audit current change" --body "Review the current change and write a report only."
 ```
 
+`run-hidden` returns immediately after writing task metadata and launching a hidden worker process. Use `check --run <run_id>` to watch the report. If you explicitly need a blocking run, add `--wait`.
+
 To use WorkBuddy:
 
 ```powershell
@@ -83,7 +85,7 @@ WorkBuddy background runs automatically pass `--max-turns 8` unless you override
 node .\scripts\agent-commander.mjs continue-hidden --assistant claude --project-root "C:\path\to\your\project" --run <run_id> --body "Follow up on the previous report and verify the missing item."
 ```
 
-Follow-up rounds run sequentially under the same project lock. This is deliberate: the public version avoids controlling the user's active keyboard, mouse, windows, or clipboard.
+Follow-up rounds also launch through a hidden worker by default and run sequentially under the same project lock. This is deliberate: the public version avoids controlling the user's active keyboard, mouse, windows, or clipboard.
 
 ## Project Configuration
 
